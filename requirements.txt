@@ -1,0 +1,8 @@
+# ===========================================================
+# Dependências Python do projeto
+# Usado pelo Dockerfile (Opção B)
+# ===========================================================
+
+requests
+pandas
+psycopg2-binary

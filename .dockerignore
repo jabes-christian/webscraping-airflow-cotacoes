@@ -1,0 +1,34 @@
+# ===========================================================
+# .dockerignore — evita enviar arquivos desnecessários
+# para o build context do Docker
+# ===========================================================
+
+# Logs do Airflow
+logs/
+
+# Secrets — nunca entram na imagem
+secrets/
+
+# Variáveis de ambiente
+.env
+
+# Dados gerados pelo projeto
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Git
+.git/
+.gitignore
+
+# Docs
+README.md
+
+# Sistema
+.DS_Store
+Thumbs.db

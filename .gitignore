@@ -1,0 +1,23 @@
+# ===========================================================
+# .gitignore — Airflow Project
+# ===========================================================
+
+# Logs do Airflow
+logs/
+
+# Secrets — NUNCA versionar
+secrets/
+
+# Variáveis de ambiente
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Sistema
+.DS_Store
+Thumbs.db

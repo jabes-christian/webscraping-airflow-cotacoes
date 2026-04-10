@@ -1,0 +1,143 @@
+version: '3'
+
+x-airflow-common:
+  &airflow-common
+  # -------------------------------------------------------
+  # OPÇÃO A: Usar imagem oficial (sem dependências extras)
+  # -------------------------------------------------------
+  # image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.9.1}
+
+  # -------------------------------------------------------
+  # OPÇÃO B: Imagem customizada com Dockerfile + requirements.txt
+  # Comente a linha "image" acima e descomente a linha abaixo
+  # Rode: docker compose build
+  # -------------------------------------------------------
+  build: .
+
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.session'
+    AIRFLOW__SECRETS__BACKEND: airflow.secrets.local_filesystem.LocalFilesystemBackend
+    AIRFLOW__SECRETS__BACKEND_KWARGS: '{"variables_file_path": "/opt/secrets/variables.yaml", "connections_file_path": "/opt/secrets/connections.yaml"}'
+    # Dependências extras (Opção A apenas) — separar por espaço
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+
+  volumes:
+    - ${AIRFLOW_DAGS}:/opt/airflow/dags
+    - ${AIRFLOW_LOGS}:/opt/airflow/logs
+    - ${AIRFLOW_PLUGINS}:/opt/airflow/plugins
+    - ${AIRFLOW_SECRETS}:/opt/secrets
+
+  networks:
+    - airflow
+
+  user: "${AIRFLOW_UID:-50000}:0"
+
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+# ===========================================================
+# SERVIÇOS
+# ===========================================================
+
+services:
+
+  # ---------------------------------------------------------
+  # PostgreSQL — backend do Airflow e banco de dados do ETL
+  # ---------------------------------------------------------
+  postgres:
+    image: postgres:13
+    networks:
+      - airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5432:5432"   # Exposto para o DBeaver conectar
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  # ---------------------------------------------------------
+  # Inicialização: migrate DB + cria usuário admin
+  # ---------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username ${_AIRFLOW_WWW_USER_USERNAME:-admin} \
+          --password ${_AIRFLOW_WWW_USER_PASSWORD:-admin} \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-admin}
+    user: "0:0"
+    volumes:
+      - .:/sources
+
+  # ---------------------------------------------------------
+  # Webserver — Interface gráfica do Airflow
+  # ---------------------------------------------------------
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------
+  # Scheduler — Agendador de DAGs
+  # ---------------------------------------------------------
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+# ===========================================================
+# REDE E VOLUMES
+# ===========================================================
+
+networks:
+  airflow:
+
+volumes:
+  postgres-db-volume:
