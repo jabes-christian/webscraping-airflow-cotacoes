@@ -1,6 +1,6 @@
-# 🚀 Airflow Template — Guia de Uso
+# 🚀 Web Scraping — Cotações de Moedas
 
-Template padrão para projetos de ETL/Web Scraping com Apache Airflow + PostgreSQL + Docker.
+Web Scraping/ETL com Apache Airflow + PostgreSQL + Docker extraindo dados de um .csv de cotações de moedas do Banco Central para um Base de Dados.
 
 ---
 
@@ -9,6 +9,7 @@ Template padrão para projetos de ETL/Web Scraping com Apache Airflow + PostgreS
 ```
 meu-projeto/
 ├── dags/                   # DAGs do Airflow (seus arquivos .py)
+│    └── cotacoes.py         # arquivo.py do scraping
 ├── logs/                   # Logs gerados automaticamente
 ├── plugins/                # Plugins customizados do Airflow
 ├── secrets/
@@ -106,3 +107,9 @@ docker compose build --no-cache
 
 - **Nunca versione** o arquivo `.env` e a pasta `secrets/` — já estão no `.gitignore`
 - Em produção, troque as senhas padrão (`airflow`/`admin`) por valores seguros no `.env`
+
+---
+
+## 👨‍💻 Autor
+
+Desenvolvido por **Jabes Christian**
