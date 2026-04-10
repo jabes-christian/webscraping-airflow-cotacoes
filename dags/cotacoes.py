@@ -110,12 +110,6 @@ def transformar(**kwargs) -> None:
 
 
 def carregar(**kwargs) -> None:
-    """
-    Lê o DataFrame do XCom e insere os registros no PostgreSQL.
-    Cria o schema e a tabela automaticamente se não existirem.
-
-    Se o XCom estiver vazio (dia sem arquivo), a task é pulada.
-    """
     ti = kwargs["ti"]
     df_json = ti.xcom_pull(key="df_transformado", task_ids="transformar")
 
@@ -131,49 +125,56 @@ def carregar(**kwargs) -> None:
     conn = hook.get_conn()
     cursor = conn.cursor()
 
-    # Cria schema e tabela se não existirem
-    cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA};")
-    cursor.execute(f"""
-        CREATE TABLE IF NOT EXISTS {SCHEMA}.{TABELA} (
-            id               SERIAL PRIMARY KEY,
-            DT_FECHAMENTO    DATE,
-            COD_MOEDA        VARCHAR(10),
-            TIPO_MOEDA       VARCHAR(10),
-            DESC_MOEDA       VARCHAR(100),
-            TAXA_COMPRA      NUMERIC(18, 6),
-            TAXA_VENDA       NUMERIC(18, 6),
-            PARIDADE_COMPRA  NUMERIC(18, 6),
-            PARIDADE_VENDA   NUMERIC(18, 6),
-            criado_em        TIMESTAMP DEFAULT NOW()
-        );
-    """)
-    conn.commit()
-
-    # Insere os registros
-    inseridos = 0
-    for _, row in df.iterrows():
+    try:
+        # Cria schema e tabela se não existirem
+        cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA};")
         cursor.execute(f"""
-            INSERT INTO {SCHEMA}.{TABELA} (
-                DT_FECHAMENTO, COD_MOEDA, TIPO_MOEDA, DESC_MOEDA,
-                TAXA_COMPRA, TAXA_VENDA, PARIDADE_COMPRA, PARIDADE_VENDA
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            row["DT_FECHAMENTO"],
-            row["COD_MOEDA"],
-            row["TIPO_MOEDA"],
-            row["DESC_MOEDA"],
-            row["TAXA_COMPRA"],
-            row["TAXA_VENDA"],
-            row["PARIDADE_COMPRA"],
-            row["PARIDADE_VENDA"],
-        ))
-        inseridos += 1
+            CREATE TABLE IF NOT EXISTS {SCHEMA}.{TABELA} (
+                id               SERIAL PRIMARY KEY,
+                DT_FECHAMENTO    DATE,
+                COD_MOEDA        VARCHAR(10),
+                TIPO_MOEDA       VARCHAR(10),
+                DESC_MOEDA       VARCHAR(100),
+                TAXA_COMPRA      NUMERIC(18, 6),
+                TAXA_VENDA       NUMERIC(18, 6),
+                PARIDADE_COMPRA  NUMERIC(18, 6),
+                PARIDADE_VENDA   NUMERIC(18, 6),
+                criado_em        TIMESTAMP DEFAULT NOW()
+            );
+        """)
+        conn.commit()
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        # Insere os registros
+        inseridos = 0
+        for _, row in df.iterrows():
+            cursor.execute(f"""
+                INSERT INTO {SCHEMA}.{TABELA} (
+                    DT_FECHAMENTO, COD_MOEDA, TIPO_MOEDA, DESC_MOEDA,
+                    TAXA_COMPRA, TAXA_VENDA, PARIDADE_COMPRA, PARIDADE_VENDA
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                row["DT_FECHAMENTO"],
+                row["COD_MOEDA"],
+                row["TIPO_MOEDA"],
+                row["DESC_MOEDA"],
+                row["TAXA_COMPRA"],
+                row["TAXA_VENDA"],
+                row["PARIDADE_COMPRA"],
+                row["PARIDADE_VENDA"],
+            ))
+            inseridos += 1
 
-    logging.warning(f"[LOAD] {inseridos} registros inseridos com sucesso!")
+        conn.commit()
+        logging.warning(f"[LOAD] {inseridos} registros inseridos com sucesso!")
+
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"[LOAD] Erro ao inserir dados: {e}")
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
 with DAG(
