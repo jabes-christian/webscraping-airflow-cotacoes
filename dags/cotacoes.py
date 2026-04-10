@@ -10,9 +10,6 @@ from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 from airflow.hooks.postgres_hook import PostgresHook
 
-# ===========================================================
-# CONSTANTES
-# ===========================================================
 
 COLUNAS = [
     "DT_FECHAMENTO",
@@ -30,33 +27,58 @@ SCHEMA = "public"
 TABELA = "cotacoes"
 
 
-def extrair(**kwargs) -> str:
+def extrair(**kwargs) -> None:
     """
     Baixa o CSV de cotações do Banco Central para a data de execução
     e empurra o conteúdo bruto para o XCom.
+
+    Dias sem arquivo (fins de semana e feriados) são ignorados:
+    a task registra um aviso e sinaliza via XCom para que as
+    tasks seguintes (transformar e carregar) sejam puladas.
     """
     ds_nodash = kwargs["ds_nodash"]
     base_url = Variable.get("BCB_BASE_URL")
     full_url = f"{base_url}/{ds_nodash}.csv"
+    ti = kwargs["ti"]
 
     logging.warning(f"[EXTRAÇÃO] Baixando: {full_url}")
 
-    response = requests.get(full_url, timeout=30)
-    response.raise_for_status()
+    try:
+        response = requests.get(full_url, timeout=30)
+        response.raise_for_status()
+
+    except requests.exceptions.HTTPError as e:
+        # 404 = dia sem arquivo (feriado ou fim de semana)
+        if response.status_code == 404:
+            logging.warning(
+                f"[EXTRAÇÃO] Arquivo não encontrado para {ds_nodash} "
+                f"(provavelmente fim de semana ou feriado). Pulando..."
+            )
+            ti.xcom_push(key="csv_bruto", value=None)
+            return
+
+        # Qualquer outro erro HTTP levanta a exceção normalmente
+        raise e
 
     logging.warning(
         f"[EXTRAÇÃO] Download concluído. Tamanho: {len(response.content)} bytes")
-
-    # Empurra o conteúdo bruto para o XCom (próxima task vai ler)
-    kwargs["ti"].xcom_push(key="csv_bruto", value=response.text)
+    ti.xcom_push(key="csv_bruto", value=response.text)
 
 
 def transformar(**kwargs) -> None:
     """
     Lê o CSV bruto do XCom, aplica os nomes de colunas,
     trata os tipos e empurra o DataFrame serializado para o XCom.
+
+    Se o XCom estiver vazio (dia sem arquivo), a task é pulada.
     """
-    csv_bruto = kwargs["ti"].xcom_pull(key="csv_bruto", task_ids="extrair")
+    ti = kwargs["ti"]
+    csv_bruto = ti.xcom_pull(key="csv_bruto", task_ids="extrair")
+
+    if csv_bruto is None:
+        logging.warning("[TRANSFORMAÇÃO] Nenhum dado recebido. Pulando...")
+        ti.xcom_push(key="df_transformado", value=None)
+        return
 
     logging.warning("[TRANSFORMAÇÃO] Iniciando transformação...")
 
@@ -71,7 +93,8 @@ def transformar(**kwargs) -> None:
 
     # Converte data
     df["DT_FECHAMENTO"] = pd.to_datetime(
-        df["DT_FECHAMENTO"], format="%d/%m/%Y", errors="coerce")
+        df["DT_FECHAMENTO"], format="%d/%m/%Y", errors="coerce"
+    )
 
     # Converte campos numéricos
     for col in ["TAXA_COMPRA", "TAXA_VENDA", "PARIDADE_COMPRA", "PARIDADE_VENDA"]:
@@ -83,20 +106,23 @@ def transformar(**kwargs) -> None:
     logging.warning(f"[TRANSFORMAÇÃO] {len(df)} registros transformados.")
     logging.warning(f"[TRANSFORMAÇÃO] Preview:\n{df.head()}")
 
-    # Empurra o DataFrame serializado para o XCom
-    kwargs["ti"].xcom_push(key="df_transformado",
-                           value=df.to_json(date_format="iso"))
+    ti.xcom_push(key="df_transformado", value=df.to_json(date_format="iso"))
 
 
 def carregar(**kwargs) -> None:
     """
     Lê o DataFrame do XCom e insere os registros no PostgreSQL.
     Cria o schema e a tabela automaticamente se não existirem.
-    """
-    import json
 
-    df_json = kwargs["ti"].xcom_pull(
-        key="df_transformado", task_ids="transformar")
+    Se o XCom estiver vazio (dia sem arquivo), a task é pulada.
+    """
+    ti = kwargs["ti"]
+    df_json = ti.xcom_pull(key="df_transformado", task_ids="transformar")
+
+    if df_json is None:
+        logging.warning("[LOAD] Nenhum dado recebido. Pulando...")
+        return
+
     df = pd.read_json(StringIO(df_json))
 
     logging.warning(f"[LOAD] Carregando {len(df)} registros no PostgreSQL...")
@@ -153,9 +179,9 @@ def carregar(**kwargs) -> None:
 with DAG(
     dag_id="cotacoes_bcb",
     description="ETL — Cotações de moedas do Banco Central do Brasil",
-    schedule_interval=None,
-    start_date=datetime(2026, 1, 1),
-    catchup=False,
+    schedule_interval="@daily",
+    start_date=datetime(2026, 4, 1),
+    catchup=True,
     tags=["bcb", "etl", "cotacoes"],
 ) as dag:
 
